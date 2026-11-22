@@ -42,8 +42,28 @@ func usage() -> Never {
 
 // MARK: - Arguments
 
-var argv = Array(CommandLine.arguments.dropFirst())
-guard let command = argv.first else { usage() }
+var argv = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-psn_") }
+
+// Opened from the Dock or Finder (no command): this is VM Manager's helper, and
+// keeping a running VM in the Dock pins the helper rather than the app. Open
+// VM Manager instead of printing usage and quitting with nothing on screen.
+func openManagerIfHelper() {
+    let helper = Foundation.Bundle.main.bundleURL
+    guard helper.pathExtension == "app" else { return }
+    let manager = helper.deletingLastPathComponent()  // Helpers
+        .deletingLastPathComponent()  // Contents
+        .deletingLastPathComponent()  // VM Manager.app
+    guard manager.pathExtension == "app" else { return }
+    let done = DispatchSemaphore(value: 0)
+    NSWorkspace.shared.openApplication(at: manager, configuration: .init()) { _, error in
+        if let error { log("couldn't open \(manager.path): \(error.localizedDescription)") }
+        done.signal()
+    }
+    _ = done.wait(timeout: .now() + 10)
+    exit(0)
+}
+
+guard let command = argv.first else { openManagerIfHelper(); usage() }
 argv.removeFirst()
 
 var positional: [String] = []

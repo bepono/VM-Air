@@ -1,0 +1,68 @@
+#!/bin/sh
+# VM network guard — runs as root under launchd (installed by install.sh).
+#
+# "Internet only" VMs each get their own network inside 192.168.240.0/20, with
+# the Mac at .1 on it. These pf rules let those VMs use the Mac's DHCP and DNS
+# and reach the internet freely, and stop them from reaching or injecting
+# anything into the local network or this Mac:
+#   - everything arriving on those VMs' bridge interfaces is filtered, whatever
+#     sender address it claims (root in a VM can forge that): DHCP and DNS to
+#     the Mac pass; a sender outside the VM's subnet, any private, link-local or
+#     multicast destination, and all IPv6 are blocked; the rest (the internet) passes;
+#   - until a VM's bridge shows up, a rule on the VMs' address range covers it.
+# Bridges come and go with the VMs, so the rules are re-applied when they change.
+# Nothing else on the Mac, and nothing inside the VMs, is affected.
+set -u
+ANCHOR="com.apple/050.VMNetGuard"
+VMS="192.168.240.0/20"
+
+rules() {
+	gateways=""
+	n=240
+	while [ $n -le 255 ]; do gateways="$gateways${gateways:+, }192.168.$n.1"; n=$((n + 1)); done
+	cat <<EOF
+table <vmguard_private> const { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255 }
+table <vmguard_gateways> const { $gateways }
+EOF
+	if [ -n "$1" ]; then
+		cat <<EOF
+pass in quick on { $1 } inet proto udp from any port 68 to 255.255.255.255 port 67
+pass in quick on { $1 } inet proto udp from $VMS port 68 to <vmguard_gateways> port 67
+pass in quick on { $1 } inet proto { tcp, udp } from $VMS to <vmguard_gateways> port 53
+block return in quick on { $1 } inet from ! $VMS to any
+block return in quick on { $1 } inet from any to <vmguard_private>
+block return in quick on { $1 } inet6 all
+EOF
+	fi
+	cat <<EOF
+pass in quick inet proto udp from $VMS port 68 to <vmguard_gateways> port 67
+pass in quick inet proto { tcp, udp } from $VMS to <vmguard_gateways> port 53
+block return in quick inet from $VMS to <vmguard_private>
+EOF
+}
+
+guarded_bridges() {
+	for i in $(ifconfig -l); do
+		case $i in bridge*) ;; *) continue ;; esac
+		ifconfig "$i" 2>/dev/null | grep -qE 'inet 192\.168\.(24[0-9]|25[0-5])\.1 ' && printf '%s ' "$i"
+	done
+}
+
+last="(none loaded)"
+while :; do
+	ifs=$(guarded_bridges)
+	ifs=${ifs% }
+	if ! pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; then
+		pfctl -E >/dev/null 2>&1 && logger -t vm-netguard "enabled pf"
+		last="(none loaded)"
+	fi
+	if [ "$ifs" != "$last" ] || ! pfctl -a "$ANCHOR" -s rules 2>/dev/null | grep -q vmguard_private; then
+		if rules "$ifs" | pfctl -a "$ANCHOR" -f - 2>/tmp/vm-netguard.err; then
+			last=$ifs
+			logger -t vm-netguard "rules loaded (guarded bridges: ${ifs:-none})"
+		else
+			logger -t vm-netguard "loading rules failed: $(cat /tmp/vm-netguard.err)"
+		fi
+	fi
+	sleep 1
+done

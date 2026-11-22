@@ -1,0 +1,15 @@
+[Unit]
+Description=Run prompts and commands the Mac sends through the read-only control share
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+User=claude
+Environment=HOME=/home/claude
+WorkingDirectory=/home/claude
+ExecStart=/usr/local/bin/vm-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

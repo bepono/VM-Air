@@ -1,0 +1,4 @@
+#!/bin/sh
+# Send a prompt or a command into a VM, one-way, and print the reply.
+#   scripts/vm-prompt [VM] "prompt"      scripts/vm-prompt --help for more
+exec python3 -I "$(dirname "$0")/vm-prompt.py" "$@"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Follow live what Claude Code is doing inside a VM (default: kiosk).
+#   scripts/vm-activity [VM] [--lines N] [--once]
+exec python3 -I "$(dirname "$0")/vm-activity.py" "$@"

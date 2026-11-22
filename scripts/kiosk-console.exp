@@ -1,0 +1,41 @@
+#!/usr/bin/expect -f
+# Run one script inside the kiosk VM over its serial console, then power off.
+# The kiosk auto-logs "claude" in on the serial console; the host share is
+# mounted at /mnt/shared by the guest's fstab.
+#
+#   kiosk-console.exp <script-in-share> <vmctl command line...>
+if {$argc < 2} {
+	puts stderr "usage: kiosk-console.exp <script> <command...>"
+	exit 2
+}
+set script [lindex $argv 0]
+set cmd [lrange $argv 1 end]
+
+proc fail {msg} {
+	puts stderr "\n*** $msg"
+	catch {exec kill [exp_pid]}
+	exit 1
+}
+
+set timeout 300
+spawn {*}$cmd
+expect {
+	-re {claude@kiosk:~\$ } {}
+	timeout { fail "no shell on the serial console" }
+	eof { fail "VM exited before reaching a shell" }
+}
+send "sh /mnt/shared/$script; echo SCRIPT_EXIT=\$?\r"
+set timeout 1800
+set rc 1
+expect {
+	-re {SCRIPT_EXIT=(\d+)} { set rc $expect_out(1,string) }
+	timeout { fail "$script did not finish" }
+	eof { fail "VM exited while running $script" }
+}
+send "sudo poweroff\r"
+set timeout 120
+expect {
+	eof {}
+	timeout { fail "guest did not power off" }
+}
+exit $rc

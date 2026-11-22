@@ -1,0 +1,80 @@
+#!/bin/bash
+# vm-agent — runs jobs the Mac sends, one at a time, as this user.
+#
+# The Mac writes jobs to /mnt/control/inbox/<id>.json (scripts/vm-prompt). That
+# folder is shared read-only: nothing in this VM can write to it or reach back
+# into the Mac through it. Each job's output and status go to the normal shared
+# folder, vm-control/<hostname>/results/, where the Mac reads them as plain data.
+#
+# A job is JSON:
+#   {"id": "...", "type": "prompt", "prompt": "...", "cwd": "...", "continue": false}
+#   {"id": "...", "type": "shell",  "command": "...", "cwd": "..."}
+# A prompt runs `claude -p` (headless Claude Code, with this VM's settings: no
+# permission prompts, sudo available); "continue" resumes the most recent
+# conversation in that folder. A shell job runs the command with bash.
+set -u
+INBOX=/mnt/control/inbox
+STATE="$HOME/.local/state/vm-agent"
+mkdir -p "$STATE/done"
+
+results_dir() {
+	# Same place rules as vm-link-sessions: the shared folder, or the first
+	# writable subfolder when several folders are shared.
+	mountpoint -q /mnt/shared 2>/dev/null || return 1
+	for d in /mnt/shared /mnt/shared/*; do
+		if [ -d "$d" ] && [ -w "$d" ]; then
+			echo "$d/vm-control/$(hostname)/results"
+			return 0
+		fi
+	done
+	return 1
+}
+
+status() { # id state [exit]
+	jq -n --arg id "$1" --arg state "$2" --arg exit "${3:-}" --arg host "$(hostname)" \
+		--arg at "$(date -Is)" '{id: $id, state: $state, exit: ($exit | if . == "" then null else tonumber end), host: $host, at: $at}' \
+		> "$res/$1.json.tmp" && mv "$res/$1.json.tmp" "$res/$1.json"
+}
+
+run_job() { # file id
+	local job=$1 id=$2 type cwd
+	type=$(jq -r '.type // "prompt"' "$job")
+	cwd=$(jq -r '.cwd // empty' "$job")
+	[ -n "$cwd" ] || cwd="$HOME/shared/projects"
+	cwd=${cwd/#\~/$HOME}
+	[ -d "$cwd" ] || cwd=$HOME
+	status "$id" running
+	local rc
+	case $type in
+	prompt)
+		local args=(-p)
+		[ "$(jq -r '.continue // false' "$job")" = true ] && args+=(--continue)
+		(cd "$cwd" && jq -r '.prompt // ""' "$job" | claude "${args[@]}") > "$res/$id.out" 2>&1
+		rc=$?
+		;;
+	shell)
+		(cd "$cwd" && jq -r '.command // ""' "$job" | bash) > "$res/$id.out" 2>&1
+		rc=$?
+		;;
+	*)
+		echo "unknown job type: $type" > "$res/$id.out"
+		rc=2
+		;;
+	esac
+	status "$id" done "$rc"
+}
+
+while sleep 2; do
+	# No control share (VM started by an older runner): check again in a while.
+	[ -d "$INBOX" ] || { sleep 30; continue; }
+	res=$(results_dir) || continue
+	mkdir -p "$res" || continue
+	for job in "$INBOX"/*.json; do
+		[ -f "$job" ] || continue
+		id=$(basename "$job" .json)
+		[[ $id =~ ^[A-Za-z0-9._-]{1,80}$ ]] || continue
+		[ -e "$STATE/done/$id" ] && continue
+		touch "$STATE/done/$id"
+		run_job "$job" "$id"
+	done
+done

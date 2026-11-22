@@ -1,0 +1,40 @@
+#!/bin/sh
+# Keep this VM's Claude Code session logs (~/.claude/projects) in the folder
+# shared from the Mac, under vm-sessions/<hostname>/projects, so they can be read
+# on the Mac while Claude works (scripts/vm-activity there). Runs at every login.
+# With no writable share mounted, the logs stay in a normal local folder.
+set -u
+local_dir="$HOME/.claude/projects"
+host=$(hostname)
+target=""
+if mountpoint -q /mnt/shared 2>/dev/null; then
+	# One shared folder is mounted as /mnt/shared itself; several appear as
+	# subfolders of a read-only /mnt/shared. Use the first writable one.
+	for d in /mnt/shared /mnt/shared/*; do
+		if [ -d "$d" ] && [ -w "$d" ]; then
+			target="$d/vm-sessions/$host/projects"
+			break
+		fi
+	done
+fi
+mkdir -p "$HOME/.claude"
+in_use() { # is any process holding a file open under $1?
+	for fd in /proc/[0-9]*/fd/*; do
+		case $(readlink "$fd" 2>/dev/null) in "$1"/*) return 0 ;; esac
+	done
+	return 1
+}
+if [ -n "$target" ] && mkdir -p "$target" 2>/dev/null; then
+	if [ -d "$local_dir" ] && [ ! -L "$local_dir" ]; then
+		# Never move logs a running Claude is writing; try again at the next login.
+		if in_use "$local_dir"; then
+			echo "vm-link-sessions: Claude Code is running; session logs move at the next login" >&2
+			exit 0
+		fi
+		cp -a "$local_dir/." "$target/" && rm -rf "$local_dir"
+	fi
+	[ "$(readlink "$local_dir" 2>/dev/null)" = "$target" ] || ln -sfn "$target" "$local_dir"
+else
+	[ -L "$local_dir" ] && rm -f "$local_dir"
+	mkdir -p "$local_dir"
+fi

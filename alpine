@@ -1,0 +1,5 @@
+#!/bin/sh
+# Boot the Alpine VM in a window. Extra arguments go to vmctl,
+# e.g.  ./alpine --headless   for a serial console in this terminal.
+ROOT=$(cd "$(dirname "$0")" && pwd)
+exec "$ROOT/bin/vmctl" linux-run "$ROOT/vms/alpine" "$@"

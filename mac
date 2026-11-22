@@ -1,0 +1,6 @@
+#!/bin/sh
+# Boot the macOS VM in a window. Extra arguments go to vmctl,
+# e.g.  ./mac --recovery   to start in macOS Recovery.
+# The host folder ./shared shows up in the guest as "My Shared Files".
+ROOT=$(cd "$(dirname "$0")" && pwd)
+exec "$ROOT/bin/vmctl" mac-run "$ROOT/vms/mac" "$@"

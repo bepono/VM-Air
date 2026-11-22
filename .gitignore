@@ -1,0 +1,16 @@
+# Everything a Mac makes locally when you use the kit: VM disks and identities,
+# downloads, logs, build output, and whatever you share with the VMs.
+/vms/
+/images/
+/logs/
+/build/
+/bin/
+/screenshots/
+/shared/*
+!/shared/setup-mac-guest.sh
+!/shared/projects/
+/shared/projects/*
+!/shared/projects/CLAUDE.md
+/scripts/guest/host.env
+__pycache__/
+.DS_Store
